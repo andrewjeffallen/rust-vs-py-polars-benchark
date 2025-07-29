@@ -1,0 +1,103 @@
+name: Polars Benchmark CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      limit_rows:
+        description: 'Limit number of rows for faster CI (optional)'
+        required: false
+        default: '1000000'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: "latest"
+    
+    - name: Set up Python
+      run: uv python install 3.11
+    
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+    
+    - name: Install Python dependencies
+      run: |
+        uv sync
+    
+    - name: Build Rust benchmarks
+      run: |
+        cd rust-benchmarks
+        cargo build --release
+    
+    - name: Run Python benchmarks (limited rows for CI)
+      run: |
+        uv run python -m python_benchmarks.runner --limit-rows ${{ github.event.inputs.limit_rows || '1000000' }}
+    
+    - name: Run Rust benchmarks (limited rows for CI)
+      run: |
+        cd rust-benchmarks
+        cargo run --release -- s3://coiled-datasets/timeseries/20-years/parquet --limit-rows ${{ github.event.inputs.limit_rows || '1000000' }}
+    
+    - name: Generate comparison report
+      run: |
+        uv run python scripts/generate_report.py
+    
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: results/
+    
+    - name: Display results summary
+      run: |
+        uv run python scripts/compare_results.py
+    
+    - name: Comment PR with results (if PR)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const path = './results/python_results.json';
+          
+          if (fs.existsSync(path)) {
+            const results = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const totalTime = results.results.reduce((sum, r) => sum + r.duration_ms, 0);
+            const rowsProcessed = results.dataset_info.rows_limit || 'full dataset';
+            
+            const comment = `## 🚀 Benchmark Results
+            
+**Dataset**: Coiled timeseries (${rowsProcessed} rows)
+**Total Python time**: ${totalTime}ms
+**System**: ${results.system_info.os} (${results.system_info.cpu_count} CPUs)
+
+| Operation | Time (ms) | Memory (MB) |
+|-----------|-----------|-------------|
+${results.results.map(r => `| ${r.operation} | ${r.duration_ms} | ${r.memory_mb} |`).join('\n')}
+
+📊 Full report available in artifacts.
+
+---
+*Powered by uv ⚡ and Cargo 🦀*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+          }

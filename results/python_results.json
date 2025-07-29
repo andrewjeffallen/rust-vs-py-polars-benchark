@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-07-29T16:02:57.453399Z",
+  "results": [],
+  "system_info": {
+    "os": "Darwin",
+    "cpu_count": 8,
+    "total_memory_gb": 8
+  },
+  "dataset_info": {
+    "source": "s3://coiled-datasets/timeseries/20-years/parquet",
+    "rows_limit": null
+  }
+}
